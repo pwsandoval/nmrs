@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use nmrs::models;
 
+use crate::ui::bluetooth_devices;
 use crate::ui::networks;
 use crate::ui::networks::NetworksContext;
 use crate::ui::wired_devices;
@@ -301,6 +302,35 @@ pub async fn refresh_networks(
         }
     }
 
+    match ctx.nm.list_bluetooth_devices().await {
+        Ok(bluetooth_devices_list) => {
+            if !bluetooth_devices_list.is_empty() {
+                let bluetooth_header = Label::new(Some("Bluetooth"));
+                bluetooth_header.add_css_class("section-header");
+                bluetooth_header.add_css_class("wireless-section-header");
+                bluetooth_header.set_halign(Align::Start);
+                bluetooth_header.set_margin_top(8);
+                bluetooth_header.set_margin_bottom(4);
+                bluetooth_header.set_margin_start(12);
+                list_container.append(&bluetooth_header);
+
+                let bluetooth_list =
+                    bluetooth_devices::bluetooth_devices_view(&bluetooth_devices_list);
+                bluetooth_list.add_css_class("wired-devices-list");
+                list_container.append(&bluetooth_list);
+
+                let separator = gtk::Separator::new(Orientation::Horizontal);
+                separator.add_css_class("device-separator");
+                separator.set_margin_top(12);
+                separator.set_margin_bottom(12);
+                list_container.append(&separator);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to list bluetooth devices: {}", e);
+        }
+    }
+
     let wireless_header = Label::new(Some("Wireless"));
     wireless_header.add_css_class("section-header");
     wireless_header.add_css_class("wireless-section-header");
@@ -442,6 +472,29 @@ pub async fn refresh_networks_no_scan(
             );
             wired_list.add_css_class("wired-devices-list");
             list_container.append(&wired_list);
+
+            let separator = gtk::Separator::new(Orientation::Horizontal);
+            separator.add_css_class("device-separator");
+            separator.set_margin_top(12);
+            separator.set_margin_bottom(12);
+            list_container.append(&separator);
+        }
+    }
+
+    if let Ok(bluetooth_devices_list) = ctx.nm.list_bluetooth_devices().await {
+        if !bluetooth_devices_list.is_empty() {
+            let bluetooth_header = Label::new(Some("Bluetooth"));
+            bluetooth_header.add_css_class("section-header");
+            bluetooth_header.add_css_class("wireless-section-header");
+            bluetooth_header.set_halign(Align::Start);
+            bluetooth_header.set_margin_top(8);
+            bluetooth_header.set_margin_bottom(4);
+            bluetooth_header.set_margin_start(12);
+            list_container.append(&bluetooth_header);
+
+            let bluetooth_list = bluetooth_devices::bluetooth_devices_view(&bluetooth_devices_list);
+            bluetooth_list.add_css_class("wired-devices-list");
+            list_container.append(&bluetooth_list);
 
             let separator = gtk::Separator::new(Orientation::Horizontal);
             separator.add_css_class("device-separator");
