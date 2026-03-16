@@ -1,3 +1,4 @@
+pub mod bluetooth_devices;
 pub mod connect;
 pub mod header;
 pub mod network_page;
