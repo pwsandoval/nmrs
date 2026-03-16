@@ -1,3 +1,4 @@
+pub mod bluetooth_devices;
 pub mod connect;
 pub mod header;
 pub mod network_page;
@@ -7,8 +8,8 @@ pub mod wired_page;
 
 use gtk::prelude::*;
 use gtk::{
-    Application, ApplicationWindow, Box as GtkBox, Label, Orientation, ScrolledWindow, Spinner,
-    Stack, STYLE_PROVIDER_PRIORITY_USER,
+    pango::EllipsizeMode, Application, ApplicationWindow, Box as GtkBox, Label, Orientation,
+    ScrolledWindow, Spinner, Stack, STYLE_PROVIDER_PRIORITY_USER,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -54,6 +55,9 @@ pub fn build_ui(app: &Application) {
 
     let vbox = GtkBox::new(Orientation::Vertical, 0);
     let status = Label::new(None);
+    status.set_xalign(0.0);
+    status.set_ellipsize(EllipsizeMode::End);
+    status.set_max_width_chars(36);
     let list_container = GtkBox::new(Orientation::Vertical, 0);
     let stack = Stack::new();
     let is_scanning = Rc::new(Cell::new(false));

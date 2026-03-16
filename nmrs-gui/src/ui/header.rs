@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use nmrs::models;
 
+use crate::ui::bluetooth_devices;
 use crate::ui::networks;
 use crate::ui::networks::NetworksContext;
 use crate::ui::wired_devices;
@@ -56,9 +57,16 @@ pub fn build_header(
     header.set_show_title_buttons(false);
 
     let list_container = list_container.clone();
+    let prefs = crate::ui_prefs();
 
     let wifi_box = GtkBox::new(Orientation::Horizontal, 6);
-    let wifi_label = Label::new(Some("Wi-Fi"));
+    let title = match (prefs.show_wifi, prefs.show_bluetooth) {
+        (true, true) => "Network",
+        (true, false) => "Wi-Fi",
+        (false, true) => "Bluetooth",
+        (false, false) => "Network",
+    };
+    let wifi_label = Label::new(Some(title));
     wifi_label.set_halign(gtk::Align::Start);
     wifi_label.add_css_class("wifi-label");
 
@@ -167,6 +175,7 @@ pub fn build_header(
     wifi_switch.set_valign(gtk::Align::Center);
     header.pack_end(&wifi_switch);
     wifi_switch.set_size_request(24, 24);
+    wifi_switch.set_visible(prefs.show_wifi);
 
     header.pack_end(&ctx.status);
 
@@ -175,27 +184,32 @@ pub fn build_header(
         let wifi_switch = wifi_switch.clone();
         let ctx = ctx.clone();
         let is_scanning = is_scanning.clone();
+        let prefs = prefs;
 
         glib::MainContext::default().spawn_local(async move {
             ctx.stack.set_visible_child_name("loading");
             clear_children(&list_container);
 
-            match ctx.nm.wifi_enabled().await {
-                Ok(enabled) => {
-                    wifi_switch.set_active(enabled);
-                    if enabled {
-                        refresh_networks(ctx, &list_container, &is_scanning).await;
+            if prefs.show_wifi {
+                match ctx.nm.wifi_enabled().await {
+                    Ok(enabled) => {
+                        wifi_switch.set_active(enabled);
+                        if enabled || prefs.show_bluetooth {
+                            refresh_networks(ctx, &list_container, &is_scanning).await;
+                        }
+                    }
+                    Err(err) => {
+                        ctx.status
+                            .set_text(&format!("Error fetching networks: {err}"));
                     }
                 }
-                Err(err) => {
-                    ctx.status
-                        .set_text(&format!("Error fetching networks: {err}"));
-                }
+            } else {
+                refresh_networks(ctx, &list_container, &is_scanning).await;
             }
         })
     };
 
-    {
+    if prefs.show_wifi {
         let ctx = ctx.clone();
 
         wifi_switch.connect_active_notify(move |sw| {
@@ -240,36 +254,23 @@ pub async fn refresh_networks(
     clear_children(list_container);
     ctx.status.set_text("Scanning...");
 
+    let prefs = crate::ui_prefs();
+
     // Fetch wired devices first
     match ctx.nm.list_wired_devices().await {
         Ok(wired_devices) => {
-            // eprintln!("Found {} wired devices total", wired_devices.len());
-
             let available_devices: Vec<_> = wired_devices
                 .into_iter()
                 .filter(|dev| {
-                    let show = matches!(
+                    matches!(
                         dev.state,
                         models::DeviceState::Activated
                             | models::DeviceState::Disconnected
                             | models::DeviceState::Prepare
                             | models::DeviceState::Config
-                    );
-                    /* eprintln!(
-                        "  - {} ({}): {} -> {}",
-                        dev.interface,
-                        dev.device_type,
-                        dev.state,
-                        if show { "SHOW" } else { "HIDE" }
-                    ); */
-                    show
+                    )
                 })
                 .collect();
-
-            /* eprintln!(
-                "Showing {} available wired devices",
-                available_devices.len()
-            ); */
 
             if !available_devices.is_empty() {
                 let wired_header = Label::new(Some("Wired"));
@@ -299,6 +300,44 @@ pub async fn refresh_networks(
         Err(e) => {
             eprintln!("Failed to list wired devices: {}", e);
         }
+    }
+
+    if prefs.show_bluetooth {
+        match ctx.nm.list_bluetooth_devices().await {
+            Ok(bluetooth_devices_list) => {
+                if !bluetooth_devices_list.is_empty() {
+                    let bluetooth_header = Label::new(Some("Bluetooth"));
+                    bluetooth_header.add_css_class("section-header");
+                    bluetooth_header.add_css_class("wireless-section-header");
+                    bluetooth_header.set_halign(Align::Start);
+                    bluetooth_header.set_margin_top(8);
+                    bluetooth_header.set_margin_bottom(4);
+                    bluetooth_header.set_margin_start(12);
+                    list_container.append(&bluetooth_header);
+
+                    let bluetooth_list =
+                        bluetooth_devices::bluetooth_devices_view(&bluetooth_devices_list);
+                    bluetooth_list.add_css_class("wired-devices-list");
+                    list_container.append(&bluetooth_list);
+
+                    let separator = gtk::Separator::new(Orientation::Horizontal);
+                    separator.add_css_class("device-separator");
+                    separator.set_margin_top(12);
+                    separator.set_margin_bottom(12);
+                    list_container.append(&separator);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to list bluetooth devices: {}", e);
+            }
+        }
+    }
+
+    if !prefs.show_wifi {
+        ctx.status.set_text("");
+        ctx.stack.set_visible_child_name("networks");
+        is_scanning.set(false);
+        return;
     }
 
     let wireless_header = Label::new(Some("Wireless"));
@@ -384,46 +423,28 @@ pub async fn refresh_networks_no_scan(
     is_scanning: &Rc<Cell<bool>>,
 ) {
     if is_scanning.get() {
-        // Don't interfere with an ongoing scan or refresh
         return;
     }
 
-    // Set flag to prevent concurrent refreshes
     is_scanning.set(true);
-
     clear_children(list_container);
 
-    // Fetch wired devices first
-    if let Ok(wired_devices) = ctx.nm.list_wired_devices().await {
-        // eprintln!("Found {} wired devices total", wired_devices.len());
+    let prefs = crate::ui_prefs();
 
-        // Filter out unavailable devices to reduce clutter
+    if let Ok(wired_devices) = ctx.nm.list_wired_devices().await {
         let available_devices: Vec<_> = wired_devices
             .into_iter()
             .filter(|dev| {
-                let show = matches!(
+                matches!(
                     dev.state,
                     models::DeviceState::Activated
                         | models::DeviceState::Disconnected
                         | models::DeviceState::Prepare
                         | models::DeviceState::Config
                         | models::DeviceState::Unmanaged
-                );
-                /* eprintln!(
-                    "  - {} ({}): {} -> {}",
-                    dev.interface,
-                    dev.device_type,
-                    dev.state,
-                    if show { "SHOW" } else { "HIDE" }
-                ); */
-                show
+                )
             })
             .collect();
-
-        /* eprintln!(
-            "Showing {} available wired devices",
-            available_devices.len()
-        );*/
 
         if !available_devices.is_empty() {
             let wired_header = Label::new(Some("Wired"));
@@ -449,6 +470,39 @@ pub async fn refresh_networks_no_scan(
             separator.set_margin_bottom(12);
             list_container.append(&separator);
         }
+    }
+
+    if prefs.show_bluetooth {
+        if let Ok(bluetooth_devices_list) = ctx.nm.list_bluetooth_devices().await {
+            if !bluetooth_devices_list.is_empty() {
+                let bluetooth_header = Label::new(Some("Bluetooth"));
+                bluetooth_header.add_css_class("section-header");
+                bluetooth_header.add_css_class("wireless-section-header");
+                bluetooth_header.set_halign(Align::Start);
+                bluetooth_header.set_margin_top(8);
+                bluetooth_header.set_margin_bottom(4);
+                bluetooth_header.set_margin_start(12);
+                list_container.append(&bluetooth_header);
+
+                let bluetooth_list =
+                    bluetooth_devices::bluetooth_devices_view(&bluetooth_devices_list);
+                bluetooth_list.add_css_class("wired-devices-list");
+                list_container.append(&bluetooth_list);
+
+                let separator = gtk::Separator::new(Orientation::Horizontal);
+                separator.add_css_class("device-separator");
+                separator.set_margin_top(12);
+                separator.set_margin_bottom(12);
+                list_container.append(&separator);
+            }
+        }
+    }
+
+    if !prefs.show_wifi {
+        ctx.status.set_text("");
+        ctx.stack.set_visible_child_name("networks");
+        is_scanning.set(false);
+        return;
     }
 
     let wireless_header = Label::new(Some("Wireless"));
@@ -497,6 +551,5 @@ pub async fn refresh_networks_no_scan(
         }
     }
 
-    // Release the lock
     is_scanning.set(false);
 }
